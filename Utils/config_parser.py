@@ -29,7 +29,11 @@ def get_configuration(data: dict, value: str) -> str:
 # Config Constants
 class ConfigConstants:
 
-	pass
+    LOG_FILE_NAME = "chatify.log"
+    LOG_FORMAT = "[%(asctime)s] - [%(name)s] - [%(levelname)s] --- %(message)s"
+    DATE_TIME_FORMAT = "%D/%M/%Y %H:%M:%S"
+    UTF_8 = 'utf-8'
+
 
 
 
