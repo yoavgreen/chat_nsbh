@@ -22,8 +22,8 @@ def main():
         server_protocol = str(get_configuration(server_configs, ServerConstants.SERVER_PROTOCOL))
 
         # Setup and run server
-        server = Server(server_ip_address, server_port, server_protocol)
-        server.setup_server()
+        server = Server(server_ip=server_ip_address, server_port=server_port, connection_protocol=server_protocol)
+        server.run()
 
     except Exception as err:
         print(err)

@@ -7,3 +7,4 @@
 
 - Custom Logger class
 - Custom exception class with file, class, method and line
+- Database or files for registered clients and their UUID
