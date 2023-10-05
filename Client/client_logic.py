@@ -30,6 +30,7 @@ class Client(CustomSocket):
         while True:
 
             try:
+
                 msg = self.client_socket.recv(1024).decode(Config.UTF_8)
                 print(msg)
 
@@ -39,8 +40,9 @@ class Client(CustomSocket):
     def custom_send(self):
         while True:
             try:
-                # self.client_socket.send()\
-                pass
+                msg = input("")
+                self.client_socket.send(msg.encode(Config.UTF_8))
+                
             except Exception as err:
                 raise ClientError(f"Unable to send message, Error: {err}")
 
@@ -54,6 +56,7 @@ class Client(CustomSocket):
             send_thread.start()
 
         except Exception as err:
+            self.client_socket.close()
             raise ClientError(f"Unable to run client, Error: {err}.")
 
 
