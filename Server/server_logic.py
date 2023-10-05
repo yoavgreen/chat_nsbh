@@ -10,8 +10,9 @@ class Server(CustomSocket):
         super().__init__(connection_protocol)
         self.server_ip = server_ip
         self.server_port = server_port
-        self.connected_clients = []
-        self.active_connections = 0
+        self.connected_sockets = [] # For the connected sockets only
+        self.registered_clients = [] # For the entire connected clients
+        self.active_connections = 0 # For the current active connections
         # Create server socket in the constructor
         self.server_socket = super().create_socket()
         self.utils = Utils()
@@ -35,11 +36,12 @@ class Server(CustomSocket):
         except socket_error as err:
             raise ServerError(f"Unable to setup server, Error: '{err}'.")
 
-    def add_new_client(self, client: socket):
+    def add_new_client(self,client: socket, clients_ram_template: dict) -> None:
         try:
-            self.connected_clients.append(client)
+            self.connected_sockets.append(client)
+            self.registered_clients.append(clients_ram_template)
             self.active_connections += 1
-            self.logger.info(f"Added new client '{str(client)}' successfully.")
+            self.logger.info(f"Added new client '{clients_ram_template[ServerConstants.CLIENT_NAME]}' successfully.")
 
         except Exception as err:
             raise ServerError(f"Unable to add new client, Error: {err}")
@@ -48,19 +50,50 @@ class Server(CustomSocket):
         try:
             # TODO - if active_connection > 16 send error to client
 
-            self.add_new_client(client)
-
             # Create A RAM data copy
             clients_ram_template = ServerConstants.ram_clients_template.copy()
             clients_ram_template[ServerConstants.CLIENT_LAST_SEEN] = self.utils.last_seen()
 
+            # TODO - forward messages between clients
+            # New client first message
+            client.send("Please enter your nickname: ".encode(Config.UTF_8))
+            msg = client.recv(1024).decode(Config.UTF_8)
+
+            # TODO - refactor into a different method
             # Handle registration
-            client.send(f"Please enter a nickname: ".encode(Config.UTF_8))
-            nickname = client.recv(1024).decode(Config.UTF_8)
-            print(nickname)
+            if not self.is_registered(msg):
+
+                clients_ram_template[ServerConstants.CLIENT_SOCKET] = client
+                clients_ram_template[ServerConstants.CLIENT_NAME] = msg
+                clients_ram_template[ServerConstants.CLIENT_ID] = self.utils.generate_client_uuid()
+                self.add_new_client(client, clients_ram_template)
+                self.broadcast(f"{msg} has entered the chat.")
+            else:
+                self.broadcast(msg)
 
         except Exception as err:
             raise ServerError(f"Unable to handle new client, Error: {err}")
+
+    def broadcast(self, msg: str) -> None:
+        try:
+            # Validate that connected list is not empty
+            if self.registered_clients:
+                for client in self.connected_sockets:
+                    client.send(msg.encode(Config.UTF_8))
+
+        except Exception as err:
+            raise ServerError(f"Unable to broadcast message '{msg}'.") 
+    
+    def is_connected(self, client: socket) -> bool:
+        if client in self.connected_sockets:
+            return True
+        return False
+
+    def is_registered(self, username: str) -> bool:
+        if self.registered_clients:
+            if username in list(self.registered_clients[0][ServerConstants.CLIENT_NAME]):
+                return True
+            return False
 
     def run(self):
         try:
@@ -68,7 +101,7 @@ class Server(CustomSocket):
 
             self.logger.info(f"Server is now listening on {self.server_ip}:{self.server_port}.")
             print(ServerConstants.SERVER_ART_LOGO, end="\n\n")
-            print("Welcome to chatify\n")
+            print(f"{'#'*40}\n# Welcome to chatify message server\n{'#'*40}\n")
 
             while True:
                 connection, address = self.server_socket.accept()
@@ -95,6 +128,7 @@ class ServerConstants:
     CLIENT_NAME = "client_name"
     CLIENT_LAST_SEEN = "client_last_seen"
     CLIENT_IS_BANNED = "is_banned"
+    CLIENT_SOCKET = "client_socket"
 
     # Config constants
     CONFIG_FILE_NAME = "server_config.json"
@@ -125,7 +159,8 @@ class ServerConstants:
         CLIENT_ID: '{}',
         CLIENT_NAME: '{}',
         CLIENT_LAST_SEEN: '{}',
-        CLIENT_IS_BANNED: '{}'
+        CLIENT_IS_BANNED: '{}',
+        CLIENT_SOCKET: "" 
     }
 
 
