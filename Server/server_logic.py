@@ -1,13 +1,14 @@
 from Socket.custom_socket import socket, socket_error, CustomSocket, Thread
 from socket import SOL_SOCKET, SO_REUSEADDR
 from Utils.utils import Utils
-from Utils.config_parser import ConfigConstants as Config
+from Utils.config_parser import create_config_file, load_config_file_to_memory, ConfigConstants as Config
 from Utils.logger import Logger
 from typing import Optional, Any
-from json import dumps
+from os import path
 
 
 # TODO - keepalive, if connection has been reset by peer, log and keep running
+# TODO - Config package to hold all config files
 
 class Server(CustomSocket):
     def __init__(self, server_ip: str, server_port: int, connection_protocol: str,
@@ -30,6 +31,17 @@ class Server(CustomSocket):
 
     def setup(self) -> None:
         try:
+            # Get server configs
+            if not path.exists(ServerConstants.SERVER_CONFIG_FILE):
+                create_config_file(file_path=ServerConstants.SERVER_CONFIG_FILE, data=ServerConstants.server_configs_template)
+
+            # Insert to server RAM DB
+            root_ram_template = ServerConstants.ram_clients_template.copy()
+            server_configs = load_config_file_to_memory(ServerConstants.SERVER_CONFIG_FILE)
+            root_ram_template[ServerConstants.CLIENT_NAME] = server_configs[ServerConstants.ROOT_USER]
+            root_ram_template[ServerConstants.CLIENT_PASSWORD] = server_configs[ServerConstants.ROOT_PASSWORD]
+            self.registered_clients.append(root_ram_template)
+
             # Reuse the socket port number
             self.server_socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
 
@@ -59,17 +71,26 @@ class Server(CustomSocket):
             # Get client username
             username = self.custom_send_recv(sck=client, request=ServerConstants.RES_REGISTER, response=True)
 
-            if username == "admin":
+            # Root user
+            if username == ServerConstants.server_configs_template[ServerConstants.ROOT_USER]:
+                password = self.custom_send_recv(sck=client, request=ServerConstants.REGISTER_ROOT, response=True)
+                if not self.fetch_data(ServerConstants.CLIENT_PASSWORD, value=password):
+                    # TODO - implement max number of tries logic
+                    self.custom_send_recv(sck=client, request=ServerConstants.REGISTER_FAILED_PASSWORD, response=False)
+
+            # Banned user
+            if self.fetch_data(column=ServerConstants.CLIENT_IS_BANNED, value=username):
                 pass
 
-            # TODO - check if banned
-
+            # Invalid username
             if self.fetch_data(column=ServerConstants.CLIENT_NAME, value=username):
                 self.custom_send_recv(sck=client, request=ServerConstants.REGISTER_FAILED_USERNAME)
 
+            # Max connections
             elif self.active_connections > 16:
                 self.custom_send_recv(sck=client, request=ServerConstants.REGISTER_FAILED_GRP_FULL)
 
+            # Register client
             else:
                 clients_ram_template[ServerConstants.CLIENT_SOCKET] = client
                 clients_ram_template[ServerConstants.CLIENT_NAME] = username
@@ -173,10 +194,14 @@ class Server(CustomSocket):
 
 
 class ServerConstants:
+
+    SERVER_CONFIG_FILE = "server_config.json"
+
     # TODO - data class
     # RAM DB constants
     CLIENT_ID = "client_id"
     CLIENT_NAME = "client_name"
+    CLIENT_PASSWORD = "client_password"
     CLIENT_LAST_SEEN = "client_last_seen"
     CLIENT_IS_BANNED = "is_banned"
     CLIENT_SOCKET = "client_socket"
@@ -185,9 +210,18 @@ class ServerConstants:
     ram_clients_template = {
         CLIENT_ID: '{}',
         CLIENT_NAME: '{}',
+        CLIENT_PASSWORD: '{}',
         CLIENT_LAST_SEEN: '{}',
         CLIENT_IS_BANNED: '{}',
         CLIENT_SOCKET: ""
+    }
+
+    ROOT_USER = "root_user"
+    ROOT_PASSWORD = "root_password"
+
+    server_configs_template = {
+        ROOT_USER: "root",
+        ROOT_PASSWORD: "qwer1234"
     }
 
     SERVER_ART_LOGO = """
@@ -204,8 +238,10 @@ class ServerConstants:
     # For message protocol
     REGISTER = "register"
     REGISTER_RESULT = "register_result"
+    REGISTER_ROOT = "Please enter root password: "
     REGISTER_SUCCESS = "register_success"
     REGISTER_FAILED_USERNAME = "Username is not available, please choose another: "
+    REGISTER_FAILED_PASSWORD = "Password is incorrect, please try again: "
     REGISTER_FAILED_GRP_FULL = "Group is full."
     MSG_HISTORY = "msg_history"
     REQ_REGISTER = "REQ_REGISTER"
