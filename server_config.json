@@ -1,5 +1,8 @@
 {
   "server_ip_address": "127.0.0.1",
   "server_port": 8888,
-  "server_protocol": "tcp"
+  "server_protocol": "tcp",
+  "debug_mode": "false",
+  "save_chat_history": "false",
+  "log_all_messages": "true"
 }

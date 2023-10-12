@@ -1,28 +1,32 @@
-import json
-
 from Socket.custom_socket import socket, socket_error, CustomSocket, Thread
 from socket import SOL_SOCKET, SO_REUSEADDR
 from Utils.utils import Utils
 from Utils.config_parser import ConfigConstants as Config
-from logging import getLogger, basicConfig
+from Utils.logger import Logger
 from typing import Optional, Any
+from json import dumps
 
+
+# TODO - keepalive, if connection has been reset by peer, log and keep running
 
 class Server(CustomSocket):
-    def __init__(self, server_ip: str, server_port: int, connection_protocol: str) -> None:
+    def __init__(self, server_ip: str, server_port: int, connection_protocol: str,
+                 debug_mode: bool, save_chat_history: bool, log_all_messages: bool) -> None:
         super().__init__(connection_protocol)
         self.server_ip = server_ip
         self.server_port = server_port
+        self.save_msg_history = save_chat_history
+        self.log_all_messages = log_all_messages
         self.connected_sockets = []  # For the connected sockets only
         self.registered_clients = []  # For the entire connected clients
         self.active_connections = 0  # For the current active connections
+        self.receive_buffer = 1024
+        self.chat_history = []
         # Create server socket in the constructor
         self.server_socket = super().create_socket()
         self.utils = Utils()
         # Set class logger
-        self.logger = getLogger(self.__class__.__name__)
-        basicConfig(filename=Config.LOG_FILE_NAME, filemode=self.utils.set_file_mode(Config.LOG_FILE_NAME),
-                    format=Config.LOG_FORMAT, datefmt=Config.DATE_TIME_FORMAT)
+        self.logger = Logger(logger_name=self.__class__.__name__, debug_mode=debug_mode)
 
     def setup(self) -> None:
         try:
@@ -34,7 +38,6 @@ class Server(CustomSocket):
 
             # Start listen to incoming connections
             self.server_socket.listen()
-            self.logger.info(f"Setup server successfully.")
 
         except socket_error as err:
             raise ServerError(f"Unable to setup server, Error: '{err}'.")
@@ -44,98 +47,115 @@ class Server(CustomSocket):
             self.connected_sockets.append(client)
             self.registered_clients.append(clients_ram_template)
             self.active_connections += 1
-            self.logger.info(f"Added new client '{clients_ram_template[ServerConstants.CLIENT_NAME]}' successfully.")
+            self.logger.logger.info(f"Added new client '{clients_ram_template[ServerConstants.CLIENT_NAME]}' successfully.")
             print(f"{clients_ram_template[ServerConstants.CLIENT_NAME]} has registered successfully.")
 
         except Exception as err:
             raise ServerError(f"Unable to add new client, Error: {err}")
 
-    def custom_send_recv(self, client: socket, request: str, result: Optional[bool] = False) -> Any:
+    def handle_registration(self, client: socket, clients_ram_template: dict):
         try:
-            for key in ServerConstants.message_protocol_template.keys():
 
-                # Validate
-                if key == request:
-                    data = {key: ServerConstants.message_protocol_template[key]}
-                    client.send(json.dumps(data).encode(Config.UTF_8))
-                    # Send the raw encoded message
-                #else:
-                #    raise ValueError(f"Unsupported request '{request}'.")
+            # Get client username
+            username = self.custom_send_recv(sck=client, request=ServerConstants.RES_REGISTER, response=True)
 
-            if result:
-                return client.recv(1024).decode(Config.UTF_8)
+            if username == "admin":
+                pass
 
-        except Exception as err:
-            raise ServerError(f"Unable to send '{request}' to '{str(client)}', Error: {err}")
+            # TODO - check if banned
 
-    def handle_registration(self, client: socket, clients_ram_template: dict) -> bool:
-        try:
-            username = self.custom_send_recv(client, ServerConstants.REGISTER, result=True)
+            if self.fetch_data(column=ServerConstants.CLIENT_NAME, value=username):
+                self.custom_send_recv(sck=client, request=ServerConstants.REGISTER_FAILED_USERNAME)
 
-            if not self.is_registered(username) and self.active_connections <= 16:
+            elif self.active_connections > 16:
+                self.custom_send_recv(sck=client, request=ServerConstants.REGISTER_FAILED_GRP_FULL)
+
+            else:
                 clients_ram_template[ServerConstants.CLIENT_SOCKET] = client
                 clients_ram_template[ServerConstants.CLIENT_NAME] = username
                 clients_ram_template[ServerConstants.CLIENT_ID] = self.utils.generate_client_uuid()
                 self.add_new_client(client, clients_ram_template)
-                client.send(ServerConstants.REGISTER_SUCCESS.encode(Config.UTF_8))
-                # Broadcast to all chat members without the new registered client
-                self.broadcast(msg=f"{username} has entered the chat.", connection=client)
-                return True
+                self.custom_send_recv(sck=client, request=ServerConstants.REGISTER_SUCCESS)
 
-            else:
-                client.send(ServerConstants.REGISTER_FAILED.encode(Config.UTF_8))
-                return False
+                # Broadcast to all chat members without the new registered client
+                self.broadcast(msg=f"{username} has entered the chat.", connection_to_ignore=client)
 
         except Exception as err:
             raise ServerError(f"Unable to register client, Error: {err}")
 
-    def handle_client(self, client: socket):
+    def handle_client(self, client: socket) -> None:
         try:
             # Create A RAM data copy
             clients_ram_template = ServerConstants.ram_clients_template.copy()
             clients_ram_template[ServerConstants.CLIENT_LAST_SEEN] = self.utils.last_seen()
 
-            self.handle_registration(client, clients_ram_template)
+            request = client.recv(self.receive_buffer).decode(Config.UTF_8)
+            print(request)
+            # Register
+            if request == ServerConstants.REQ_REGISTER:
+                self.handle_registration(client, clients_ram_template)
 
+            # Get chat history
+            if request == ServerConstants.MSG_HISTORY:
+                self.custom_send_recv(sck=client, request="\n".join(self.chat_history), response=False)
+
+            # Chat mode
             while True:
-                msg = client.recv(1024).decode(Config.UTF_8)
-                # TODO - log all messages
-                self.broadcast(msg)
+                msg = client.recv(self.receive_buffer).decode(Config.UTF_8)
+
+                # Save all chat history
+                if self.save_msg_history:
+                    self.chat_history.append(msg)
+
+                # Log all messages
+                if self.log_all_messages:
+                    self.logger.logger.info(f"Received: {msg} from {str(client.getpeername())}")
+
+                self.broadcast(msg, connection_to_ignore=client)
 
         except Exception as err:
             raise ServerError(f"Unable to handle new client, Error: {err}")
 
-    def broadcast(self, msg: str, connection: Optional[socket] = None) -> None:
+    def broadcast(self, msg: str, connection_to_ignore: Optional[socket] = None) -> None:
         try:
+
             # Validate that connected list is not empty
             if self.registered_clients:
                 for client in self.connected_sockets:
-                    if client == connection:
+                    if client == connection_to_ignore:
                         continue
+
                     client.send(msg.encode(Config.UTF_8))
 
         except Exception as err:
-            raise ServerError(f"Unable to broadcast message '{msg}'.")
+            raise ServerError(f"Unable to broadcast message '{msg}', Error: {err}")
 
-    def is_connected(self, client: socket) -> bool:
-        if client in self.connected_sockets:
-            return True
-        return False
-
-    def is_registered(self, username: str) -> bool:
+    def fetch_data(self, column: str, value: str) -> bool:
+        """Fetches data from clients database."""
         if self.registered_clients:
-            if username in list(self.registered_clients[0][ServerConstants.CLIENT_NAME]):
-                return True
+            for name in self.registered_clients:
+
+                if name.get(value) == column:
+                    return True
+
             return False
 
-    def run(self):
+    def shut_down(self):
+        # TODO - for admin user
+        for client in self.connected_sockets:
+            client.client_socket.close()
+
+        self.server_socket.close()
+
+    def run(self) -> None:
+        """Server main method to run all server logic."""
         try:
             self.setup()
             print(f"Server is now listening on {self.server_ip}:{self.server_port}...")
 
             while True:
                 connection, address = self.server_socket.accept()
-                self.logger.info(f"Server connected to {str(address)}")
+                self.logger.logger.info(f"Server connected to {str(connection.getpeername())}")
 
                 # Create new thread for each connected client
                 try:
@@ -143,7 +163,8 @@ class Server(CustomSocket):
                     client_thread.start()
 
                 except Exception as err:
-                    self.server_socket.close()
+                    self.logger.logger.error(err)
+                    connection.close()
 
                     # TODO - add join support for all clients threads
 
@@ -152,6 +173,7 @@ class Server(CustomSocket):
 
 
 class ServerConstants:
+    # TODO - data class
     # RAM DB constants
     CLIENT_ID = "client_id"
     CLIENT_NAME = "client_name"
@@ -159,24 +181,14 @@ class ServerConstants:
     CLIENT_IS_BANNED = "is_banned"
     CLIENT_SOCKET = "client_socket"
 
-    # Config constants
-    CONFIG_FILE_NAME = "server_config.json"
-
-    SERVER_IP_ADDRESS = "server_ip_address"
-    SERVER_PORT = "server_port"
-    SERVER_PROTOCOL = "server_protocol"
-
-    config_file_template = {
-        SERVER_IP_ADDRESS: "127.0.0.1",
-        SERVER_PORT: 8888,
-        SERVER_PROTOCOL: "tcp"
+    # Dictionary format for saving clients data in RAM memory
+    ram_clients_template = {
+        CLIENT_ID: '{}',
+        CLIENT_NAME: '{}',
+        CLIENT_LAST_SEEN: '{}',
+        CLIENT_IS_BANNED: '{}',
+        CLIENT_SOCKET: ""
     }
-
-    # For message protocol
-    REGISTER = "register"
-    REGISTER_RESULT = "register_result"
-    REGISTER_SUCCESS = "register_success"
-    REGISTER_FAILED = "register_failed"
 
     SERVER_ART_LOGO = """
     
@@ -189,20 +201,22 @@ class ServerConstants:
     
         """
 
-    # Dictionary format for saving clients data in RAM memory
-    ram_clients_template = {
-        CLIENT_ID: '{}',
-        CLIENT_NAME: '{}',
-        CLIENT_LAST_SEEN: '{}',
-        CLIENT_IS_BANNED: '{}',
-        CLIENT_SOCKET: ""
-    }
-
-    message_protocol_template = {
-        REGISTER: f"{SERVER_ART_LOGO}\n\n"
-                 f"{'#' * 40}\n# Welcome to chatify message server\n{'#' * 40}\n"
-                 f"Please choose your nickname: "
-    }
+    # For message protocol
+    REGISTER = "register"
+    REGISTER_RESULT = "register_result"
+    REGISTER_SUCCESS = "register_success"
+    REGISTER_FAILED_USERNAME = "Username is not available, please choose another: "
+    REGISTER_FAILED_GRP_FULL = "Group is full."
+    MSG_HISTORY = "msg_history"
+    REQ_REGISTER = "REQ_REGISTER"
+    RES_REGISTER = "Please Enter Your username: "
+    RES_WELCOME = (f"{SERVER_ART_LOGO}"
+                   f"\n{'#'*40}"
+                   f"\n# Welcome to Chatify chat group"
+                   f"\n{'#'*40}\n")
+    INPUT_PREFIX = "$: "
+    CHAT_MODE = "CHAT_MODE"
+    ACK = "ACK"
 
 
 class ServerError(Exception):
