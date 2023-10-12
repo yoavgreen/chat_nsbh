@@ -1,5 +1,6 @@
 from socket import socket, AF_INET, SOCK_STREAM, SOCK_DGRAM, error as socket_error
 from threading import Thread
+from typing import Optional, Any
 
 
 class CustomSocket(Thread):
@@ -25,6 +26,17 @@ class CustomSocket(Thread):
 
         except socket_error as err:
             raise CustomSocketError(f"Unable to create socket, Error: {err}.")
+
+    def custom_send_recv(self, sck: socket, request: str, fmt: Optional[str] = 'utf-8',
+                         buffer_size: Optional[int] = 1024, response: Optional[bool] = False) -> Any:
+        try:
+            sck.send(request.encode(fmt))
+
+            if response:
+                return sck.recv(buffer_size).decode(fmt)
+
+        except Exception as err:
+            raise CustomSocketError(f"Unable to send '{request}' to '{str(socket)}', Error: {err}")
 
     def setup(self) -> None:
         """Override method to setup server/client"""
