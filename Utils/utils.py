@@ -15,10 +15,7 @@ class Utils:
             raise UtilsError(f"Unable to get current date and time, Error: {err}")
 
     def generate_client_uuid(self) -> hex:
-        """
-        Generates a client bytes UUID in a specific size.
-        :return: The newly generated client UUID.
-        """
+
         try:
             client_uuid = uuid4().hex
             return client_uuid
@@ -28,13 +25,23 @@ class Utils:
 
     def set_file_mode(self, file_path: str) -> str:
         try:
-            if path.exists(file_path):
+
+            if path.exists(path.abspath(file_path)):
                 return 'a'
             else:
                 return 'w'
 
         except Exception as err:
             raise UtilsError(f"Unable to set file mode for file '{file_path}', Error: {err}.")
+
+    def set_config_mode(self, value: str) -> bool:
+        try:
+            if value == Config.TRUE.lower():
+                return True
+
+            return False
+        except Exception as err:
+            raise UtilsError(f"Unable to set config mode, Error: {err}")
 
 
 class UtilsError(Exception):
